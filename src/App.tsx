@@ -4,7 +4,7 @@ import {
   RefreshCw, Check, AlertCircle, PlaySquare, Info, 
   Feather, Volume2, Search, BookOpen,
   Download, Save, FolderOpen, X, Headphones,
-  Upload, FileAudio, Settings
+  Upload, FileAudio, Settings, Play, Square
 } from 'lucide-react';
 import { GoogleGenAI } from '@google/genai';
 import { Document, Packer, Paragraph, TextRun } from 'docx';
@@ -30,12 +30,18 @@ const App = () => {
   const [isReplacingLine, setIsReplacingLine] = useState(false);
 
   const [isListening, setIsListening] = useState(false);
+  const [audioLevel, setAudioLevel] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState(false);
   const [genre, setGenre] = useState('rap_egy'); 
   
   const recognitionRef = useRef<any>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -46,6 +52,7 @@ const App = () => {
 
   const [ttsPitch, setTtsPitch] = useState(1);
   const [ttsRate, setTtsRate] = useState(0.85);
+  const [isSpeaking, setIsSpeaking] = useState(false);
 
   const [savedDrafts, setSavedDrafts] = useState<{id: string, text: string, date: string}[]>([]);
   const [savedRules, setSavedRules] = useState<{id: string, rule: string, date: string}[]>([]);
@@ -75,19 +82,78 @@ const App = () => {
     }
   }, []);
 
-  const toggleListening = () => {
+  const toggleListening = async () => {
     if (isListening) {
       recognitionRef.current?.stop();
+      setIsListening(false);
+      stopAudioLevelMonitoring();
     } else {
       setError(null);
       try {
         recognitionRef.current?.start();
         setIsListening(true);
+        startAudioLevelMonitoring();
       } catch (e) {
         setError("عفواً، الميكروفون غير مدعوم أو يحتاج لإذن في هذا المتصفح.");
       }
     }
   };
+
+  const startAudioLevelMonitoring = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = audioContext;
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      analyserRef.current = analyser;
+      const source = audioContext.createMediaStreamSource(stream);
+      sourceRef.current = source;
+      source.connect(analyser);
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      const updateLevel = () => {
+        if (!analyserRef.current) return;
+        analyserRef.current.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          sum += dataArray[i];
+        }
+        const average = sum / dataArray.length;
+        // Map average (0-255) to a percentage (0-100)
+        const level = Math.min(100, Math.round((average / 128) * 100));
+        setAudioLevel(level);
+        animationFrameRef.current = requestAnimationFrame(updateLevel);
+      };
+      updateLevel();
+    } catch (err) {
+      console.error("Error accessing microphone for audio level:", err);
+    }
+  };
+
+  const stopAudioLevelMonitoring = () => {
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    setAudioLevel(0);
+  };
+
+  useEffect(() => {
+    return () => {
+      stopAudioLevelMonitoring();
+    };
+  }, []);
 
   useEffect(() => {
     const drafts = localStorage.getItem('rika_saved_drafts');
@@ -110,7 +176,7 @@ const App = () => {
     utterance.lang = 'ar-EG'; 
     
     const voices = window.speechSynthesis.getVoices();
-    const arabicVoice = voices.find(v => v.lang.includes('ar-EG')) || voices.find(v => v.lang.includes('ar'));
+    const arabicVoice = voices.find(v => v.lang === 'ar-EG') || voices.find(v => v.lang.includes('ar-EG')) || voices.find(v => v.lang.includes('ar'));
     if (arabicVoice) {
       utterance.voice = arabicVoice;
     }
@@ -118,7 +184,18 @@ const App = () => {
     utterance.rate = ttsRate; 
     utterance.pitch = ttsPitch;
     
+    utterance.onstart = () => setIsSpeaking(true);
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = () => setIsSpeaking(false);
+
     window.speechSynthesis.speak(utterance);
+  };
+
+  const stopSpeaking = () => {
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+    }
   };
 
   const speakSelectedText = () => {
@@ -240,7 +317,7 @@ ${metaTags}
     }
   };
 
-  const handleTashkeelOnly = async () => {
+  const handleEgyptianTashkeel = async () => {
     if (!inputText.trim()) return;
     setIsLoading(true); setError(null); setOutputResult(''); setOutputType('tashkeel');
     setSpellCheckSuggestions(null);
@@ -260,7 +337,6 @@ ${metaTags}
     try {
       const result = await callAI(`شكّل هذا النص بالعامية المصرية بدقة صوتية: "${inputText}"`, sysPrompt);
       setOutputResult(result);
-      speakText(result);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -268,7 +344,26 @@ ${metaTags}
     }
   };
 
-  const handleSpellCheckAndSpeak = async () => {
+  const handleStandardTashkeel = async () => {
+    if (!inputText.trim()) return;
+    setIsLoading(true); setError(null); setOutputResult(''); setOutputType('tashkeel');
+    setSpellCheckSuggestions(null);
+
+    const sysPrompt = `أنت خبير لغوي في اللغة العربية الفصحى.
+    مهمتك: وضع التشكيل (الحركات) الكامل والصحيح نحوياً وصرفياً على النص المدخل باللغة العربية الفصحى القياسية.
+    لا تغير الكلمات، فقط ضع التشكيل الكامل. أخرج النص المشكل فقط.`;
+
+    try {
+      const result = await callAI(`شكّل هذا النص باللغة العربية الفصحى: "${inputText}"`, sysPrompt);
+      setOutputResult(result);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSpellCheck = async () => {
     if (!inputText.trim()) return;
     setIsLoading(true); setError(null); setOutputResult(''); setOutputType('spellcheck');
     setSpellCheckSuggestions(null);
@@ -295,7 +390,6 @@ ${metaTags}
       const parsedData = JSON.parse(result);
       setOutputResult(parsedData.correctedText);
       setSpellCheckSuggestions(parsedData.suggestions);
-      speakText(parsedData.correctedText); 
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -1052,41 +1146,49 @@ ${metaTags}
           )}
 
           {/* Action Buttons Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-3 mt-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mt-4">
             <button 
               onClick={toggleListening}
-              className={`col-span-1 py-3.5 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all border ${
+              className={`col-span-2 md:col-span-3 lg:col-span-1 py-3.5 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all border relative overflow-hidden ${
                 isListening 
-                ? 'bg-red-500/20 border-red-500/50 text-red-400 shadow-[0_0_15px_rgba(239,68,68,0.3)] animate-pulse' 
+                ? 'bg-red-500/10 border-red-500/50 text-red-400 shadow-[0_0_15px_rgba(239,68,68,0.3)]' 
                 : 'bg-[#09090b] border-slate-800 text-slate-400 hover:bg-slate-800 hover:text-white'
               }`}
             >
-              {isListening ? <MicOff size={20} /> : <Mic size={20} />}
-              <span className="md:hidden">{isListening ? 'جاري التسجيل...' : 'تحدث بالمايك'}</span>
+              {isListening && (
+                <div 
+                  className="absolute bottom-0 left-0 w-full bg-red-500/30 transition-all duration-75"
+                  style={{ height: `${audioLevel}%` }}
+                />
+              )}
+              <div className="relative z-10 flex items-center gap-2">
+                {isListening ? <MicOff size={20} className="animate-pulse" /> : <Mic size={20} />}
+                <span>{isListening ? 'جاري التسجيل...' : 'المايك'}</span>
+              </div>
             </button>
 
             <button 
-              onClick={handleTashkeelOnly}
+              onClick={handleEgyptianTashkeel}
               disabled={isLoading || !inputText.trim()}
               className="col-span-1 py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-50 transition-all shadow-lg shadow-indigo-500/20"
             >
-              <Feather size={18} /> تشكيل ونطق
+              <Feather size={18} /> تشكيل عامية
             </button>
 
             <button 
-              onClick={handleSpellCheckAndSpeak}
+              onClick={handleStandardTashkeel}
+              disabled={isLoading || !inputText.trim()}
+              className="col-span-1 py-3.5 bg-sky-600 hover:bg-sky-500 text-white rounded-2xl font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-50 transition-all shadow-lg shadow-sky-500/20"
+            >
+              <BookOpen size={18} /> تشكيل فصحى
+            </button>
+
+            <button 
+              onClick={handleSpellCheck}
               disabled={isLoading || !inputText.trim()}
               className="col-span-1 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-50 transition-all shadow-lg shadow-emerald-500/20"
             >
-              <Volume2 size={18} /> تصحيح ونطق
-            </button>
-
-            <button 
-              onClick={handleGenerateMusicPrompt}
-              disabled={isLoading || !inputText.trim()}
-              className="col-span-1 py-3.5 bg-amber-600 hover:bg-amber-500 text-white rounded-2xl font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-50 transition-all shadow-lg shadow-amber-500/20"
-            >
-              <Headphones size={18} /> برومبت Suno
+              <Sparkles size={18} /> تصحيح إملائي
             </button>
 
             <button 
@@ -1094,7 +1196,15 @@ ${metaTags}
               disabled={isLoading || !inputText.trim()}
               className="col-span-1 py-3.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-2xl font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/25 disabled:opacity-50 transition-all"
             >
-              <Music size={18} /> تأليف أغنية
+              <Music size={18} /> تأليف أغنية (Suno)
+            </button>
+
+            <button 
+              onClick={handleGenerateMusicPrompt}
+              disabled={isLoading || !inputText.trim()}
+              className="col-span-1 py-3.5 bg-amber-600 hover:bg-amber-500 text-white rounded-2xl font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-50 transition-all shadow-lg shadow-amber-500/20"
+            >
+              <Headphones size={18} /> برومبت موسيقى
             </button>
           </div>
         </div>
@@ -1117,22 +1227,30 @@ ${metaTags}
                 <span className="font-bold text-white">النتيجة النهائية</span>
               </div>
               <div className="flex gap-2">
+                {!isSpeaking ? (
+                  <button 
+                    onClick={() => speakText(outputResult)}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/30 transition-all"
+                    title="تشغيل النطق"
+                  >
+                    <Play size={18} /> تشغيل النطق
+                  </button>
+                ) : (
+                  <button 
+                    onClick={stopSpeaking}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition-all"
+                    title="إيقاف النطق"
+                  >
+                    <Square size={18} /> إيقاف النطق
+                  </button>
+                )}
                 <button 
                   onClick={speakSelectedText}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold bg-blue-500/20 text-blue-400 border border-blue-500/30 hover:bg-blue-500/30 transition-all"
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold bg-blue-500/20 text-blue-400 border border-blue-500/30 hover:bg-blue-500/30 transition-all hidden md:flex"
                   title="انطق النص المحدد"
                 >
                   <Volume2 size={18} /> انطق المحدد
                 </button>
-                {(outputType === 'spellcheck' || outputType === 'tashkeel') && !isLoading && (
-                  <button 
-                    onClick={() => speakText(outputResult)}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/30 transition-all"
-                    title="أعد النطق"
-                  >
-                    <Volume2 size={18} /> إعد النطق
-                  </button>
-                )}
                 <button 
                   onClick={copyToClipboard}
                   className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all duration-300 ${
