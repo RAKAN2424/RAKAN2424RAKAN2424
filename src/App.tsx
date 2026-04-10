@@ -198,6 +198,19 @@ const App = () => {
     }
   };
 
+  const cleanJsonResponse = (response: string) => {
+    let cleaned = response.trim();
+    if (cleaned.startsWith('```json')) {
+      cleaned = cleaned.substring(7);
+    } else if (cleaned.startsWith('```')) {
+      cleaned = cleaned.substring(3);
+    }
+    if (cleaned.endsWith('```')) {
+      cleaned = cleaned.substring(0, cleaned.length - 3);
+    }
+    return cleaned.trim();
+  };
+
   const speakSelectedText = () => {
     const selectedText = window.getSelection()?.toString();
     if (selectedText && selectedText.trim() !== '') {
@@ -245,12 +258,33 @@ const App = () => {
         });
 
         if (response.text) return response.text.trim();
-      } catch (e) {
+      } catch (e: any) {
         retries++;
-        if (retries < maxRetries) await new Promise(r => setTimeout(r, Math.pow(2, retries) * 1000));
+        if (retries >= maxRetries) {
+          console.error("AI Generation Error:", e);
+          let errorMessage = "حدث خطأ غير متوقع أثناء الاتصال بالذكاء الاصطناعي.";
+          const errStr = e?.message || String(e);
+          
+          if (errStr.toLowerCase().includes("fetch failed") || errStr.toLowerCase().includes("network")) {
+            errorMessage = "فشل الاتصال بالخادم. يرجى التحقق من اتصال الإنترنت الخاص بك والمحاولة مرة أخرى.";
+          } else if (errStr.toLowerCase().includes("quota") || e?.status === 429) {
+            errorMessage = "تم تجاوز الحد الأقصى للاستخدام (Quota Exceeded). يرجى المحاولة لاحقاً.";
+          } else if (errStr.toLowerCase().includes("safety") || errStr.toLowerCase().includes("blocked")) {
+            errorMessage = "تم حظر المحتوى بواسطة فلاتر الأمان التابعة للذكاء الاصطناعي. يرجى تعديل النص والمحاولة مرة أخرى.";
+          } else if (errStr.toLowerCase().includes("api key")) {
+            errorMessage = "مفتاح API غير صالح أو مفقود. يرجى التحقق من الإعدادات.";
+          } else if (errStr.toLowerCase().includes("overloaded") || e?.status === 503) {
+            errorMessage = "الخادم مشغول حالياً. يرجى الانتظار قليلاً ثم المحاولة مرة أخرى.";
+          } else {
+            errorMessage = `خطأ في التوليد: ${errStr}`;
+          }
+          
+          throw new Error(errorMessage);
+        }
+        await new Promise(r => setTimeout(r, Math.pow(2, retries) * 1000));
       }
     }
-    throw new Error("فشل الاتصال بالخادم.");
+    throw new Error("فشل الاتصال بالخادم بعد عدة محاولات.");
   };
 
   const handleGenerateSong = async () => {
@@ -275,15 +309,16 @@ ${rulesAddon}
       romantic: "رومانسي هادئ. مشاعر عميقة، كلمات رقيقة ومؤثرة."
     };
 
-    const sysPrompt = `أنت كاتب أغاني محترف للذكاء الاصطناعي.
+    const sysPrompt = `أنت "أسطورة" وعبقري كتابة الأغاني والمهرجانات والراب في مصر. أنت لست مجرد ذكاء اصطناعي، بل فنان شارع حقيقي يمتلك قاموساً لا نهائياً من المصطلحات المصرية الأصيلة والإيفيهات الذكية.
     1. الأسلوب: ${genreInstructions[genre]}
-    2. استخدم العامية المصرية حصراً مع التشكيل الإيقاعي الدقيق (سكون، شدة، إلخ).
-    3. **قواعد نطق إجبارية:**
+    2. **العبقرية في الكتابة:** استخدم كلمات شارع مصرية حقيقية (صايعة وذكية). ابتعد تماماً عن الكلمات السطحية أو القوافي المبتذلة (مثل: قلبي/حبي/دربي). اكتب جملاً لها "معنى عميق" ورسالة قوية تضرب في الدماغ، وليست مجرد حشو كلمات. كل سطر يجب أن يسلم للسطر الذي يليه بذكاء وترابط.
+    3. **الوزن والقافية:** هندس القوافي لتكون غير متوقعة ومبتكرة (Multi-syllabic rhymes للراب، وقوافي رنانة للمهرجانات). الوزن يجب أن يكون مضبوطاً على الإيقاع (Flow) كأنك تغنيها فعلاً.
+    4. **قواعد نطق إجبارية:**
        - ضع علامة السكون (ْ) على الحرف الأخير من كل كلمة بلا استثناء.
        - اترك حرف الجيم (ج) كما هو دون تغيير.
        - استبدل حرف القاف (ق) بحرف الهمزة (ء) أو الألف (أ) ليعكس النطق القاهري (مثل: "قول" تصبح "أول" أو "ءول").
-    4. المستخدم سيعطيك كلمات خام أو أفكار. مهمتك أن تحولها وتؤلف منها أغنية متكاملة واحترافية جداً.
-    5. **قانون صارم (لا تخالفه أبداً):** يجب أن تخرج الأغنية *حصرياً* بهذا الترتيب والتقسيم المسبق. لا تضف أي فواصل أخرى، استبدل القوسين (اكتب الكلمات هنا) بكلمات الأغنية الاحترافية:
+    5. المستخدم سيعطيك كلمات خام أو أفكار. مهمتك أن تحولها وتؤلف منها أغنية متكاملة واحترافية جداً.
+    6. **قانون صارم (لا تخالفه أبداً):** يجب أن تخرج الأغنية *حصرياً* بهذا الترتيب والتقسيم المسبق. لا تضف أي فواصل أخرى، استبدل القوسين (اكتب الكلمات هنا) بكلمات الأغنية الاحترافية:
 
 ${metaTags}
 
@@ -387,11 +422,16 @@ ${metaTags}
 
     try {
       const result = await callAI(`صحح هذا النص إملائياً وشكله للعامية، وقدم اقتراحات للتحسين: "${inputText}"`, sysPrompt, false, true);
-      const parsedData = JSON.parse(result);
+      const cleanedResult = cleanJsonResponse(result);
+      const parsedData = JSON.parse(cleanedResult);
       setOutputResult(parsedData.correctedText);
       setSpellCheckSuggestions(parsedData.suggestions);
     } catch (err: any) {
-      setError(err.message);
+      if (err instanceof SyntaxError) {
+        setError("حدث خطأ في فهم استجابة الذكاء الاصطناعي (تنسيق غير صالح). يرجى المحاولة مرة أخرى.");
+      } else {
+        setError(err.message);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -440,10 +480,17 @@ ${metaTags}
 
     try {
       const result = await callAI(`هات كل احتمالات التشكيل للكلمة دي: "${searchWord}"`, sysPrompt, false, true, undefined, true);
-      const parsedData = JSON.parse(result);
+      const cleanedResult = cleanJsonResponse(result);
+      const parsedData = JSON.parse(cleanedResult);
       setWordSuggestions(parsedData.groups || []);
     } catch (err: any) {
-      setWordSuggestions([{ baseMeaning: "خطأ", variations: [{ word: "خطأ", meaning: "حدث خطأ أثناء جلب التشكيلات، حاول مجدداً.", confidence: 0 }] }]);
+      if (err instanceof SyntaxError) {
+        setError("حدث خطأ في فهم استجابة الذكاء الاصطناعي (تنسيق غير صالح). يرجى المحاولة مرة أخرى.");
+        setWordSuggestions([{ baseMeaning: "خطأ", variations: [{ word: "خطأ", meaning: "فشل في تحليل النتيجة.", confidence: 0 }] }]);
+      } else {
+        setError(err.message);
+        setWordSuggestions([{ baseMeaning: "خطأ", variations: [{ word: "خطأ", meaning: err.message, confidence: 0 }] }]);
+      }
     } finally {
       setIsSearchingWord(false);
     }
@@ -461,10 +508,17 @@ ${metaTags}
 
     try {
       const result = await callAI(`هات كلمات على نفس قافية ووزن: "${rhymeSearchWord}"`, sysPrompt, false, true, undefined, true);
-      const parsedData = JSON.parse(result);
+      const cleanedResult = cleanJsonResponse(result);
+      const parsedData = JSON.parse(cleanedResult);
       setRhymeResults(parsedData);
     } catch (err: any) {
-      setRhymeResults(["خطأ في جلب القوافي"]);
+      if (err instanceof SyntaxError) {
+        setError("حدث خطأ في فهم استجابة الذكاء الاصطناعي (تنسيق غير صالح). يرجى المحاولة مرة أخرى.");
+        setRhymeResults(["خطأ في تحليل النتيجة"]);
+      } else {
+        setError(err.message);
+        setRhymeResults(["خطأ في جلب القوافي"]);
+      }
     } finally {
       setIsSearchingRhyme(false);
     }
@@ -474,10 +528,16 @@ ${metaTags}
     if (!lineToReplace.trim()) return;
     setIsReplacingLine(true); setReplacementLine('');
 
-    const sysPrompt = `أنت شاعر غنائي محترف بالعامية المصرية.
+    const sysPrompt = `أنت "أسطورة" كتابة الأغاني والمهرجانات والراب في مصر. عبقري في صياغة الكلمات وصناعة القوافي والأوزان.
     المستخدم سيعطيك شطر (سطر) من أغنية.
-    مهمتك: استبدال هذا الشطر بشطر آخر يحمل نفس المعنى تقريباً ولكن بقافية مختلفة ووزن مختلف، ليكون مناسباً لأغنية.
-    أخرج الشطر الجديد فقط بدون أي إضافات.`;
+    مهمتك: استبدال هذا الشطر بشطر آخر يحمل نفس المعنى أو يخدم نفس الفكرة، ولكن بقافية جديدة ووزن إيقاعي مختلف تماماً.
+    
+    **شروط العبقرية:**
+    1. استخدم كلمات شارع مصرية أصيلة (مصطلحات حقيقية، إيفيهات، تشبيهات ذكية) لها معنى عميق وليست مجرد حشو.
+    2. الجملة يجب أن تكون "صايعة" فنياً، تضرب في الدماغ، وموزونة بالمللي على الإيقاع.
+    3. ابتعد عن الكلمات المستهلكة والسطحية.
+    
+    أخرج الشطر الجديد فقط بدون أي إضافات أو شرح.`;
 
     try {
       const result = await callAI(`استبدل هذا الشطر بقافية ووزن مختلفين: "${lineToReplace}"`, sysPrompt, false, false, undefined, true);
@@ -679,74 +739,43 @@ ${metaTags}
     URL.revokeObjectURL(url);
   };
 
-  const VirtualizedOutput = ({ text, type }: { text: string, type: string }) => {
-    const parentRef = useRef<HTMLDivElement>(null);
+  const FormattedOutput = ({ text, type }: { text: string, type: string }) => {
     const lines = text.split('\n');
 
-    const rowVirtualizer = useVirtualizer({
-      count: lines.length,
-      getScrollElement: () => parentRef.current,
-      estimateSize: () => 40,
-    });
-
     return (
-      <div 
-        ref={parentRef} 
-        className="max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar"
-        style={{ contain: 'strict' }}
-      >
-        <div
-          style={{
-            height: `${rowVirtualizer.getTotalSize()}px`,
-            width: '100%',
-            position: 'relative',
-          }}
-        >
-          {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-            const line = lines[virtualRow.index];
-            let content: React.ReactNode = line;
-            
-            if (type === 'song') {
-              if (line.match(/^\[Style:.*\]|^\[Vocal Delivery:.*\]|^\[Pronunciation.*\]/i)) {
-                content = <span className="block text-[#00ffcc] font-mono text-xs mt-1 mb-1 bg-[#00ffcc]/10 p-1.5 rounded-md w-fit" dir="ltr">{line}</span>;
-              } else if (line.match(/^\[(.*?)\]$/)) {
-                content = <span className="block text-indigo-400 font-black mt-6 mb-2 text-sm tracking-widest uppercase bg-indigo-900/30 w-fit px-2 py-1 rounded">{line}</span>;
-              } else if (line.trim() === '') {
-                content = <br />;
-              } else {
-                content = <span className="block mb-1 text-slate-100">{line}</span>;
-              }
-            } else if (type === 'music_prompt' || type === 'analysis') {
-              if (line.match(/^\[(.*?)\]/)) {
-                content = <span className="block text-amber-400 font-mono text-sm mt-2 mb-1 bg-amber-400/10 p-2 rounded-md border border-amber-400/20" dir="ltr">{line}</span>;
-              } else if (line.trim() === '') {
-                content = <br />;
-              } else {
-                content = <span className="block mb-1 text-slate-100">{line}</span>;
-              }
+      <div className="max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar whitespace-pre-wrap">
+        {lines.map((line, index) => {
+          let content: React.ReactNode = line;
+          
+          if (type === 'song') {
+            if (line.match(/^\[Style:.*\]|^\[Vocal Delivery:.*\]|^\[Pronunciation.*\]/i)) {
+              content = <span className="block text-[#00ffcc] font-mono text-xs mt-1 mb-1 bg-[#00ffcc]/10 p-1.5 rounded-md w-fit" dir="ltr">{line}</span>;
+            } else if (line.match(/^\[(.*?)\]$/)) {
+              content = <span className="block text-indigo-400 font-black mt-6 mb-2 text-sm tracking-widest uppercase bg-indigo-900/30 w-fit px-2 py-1 rounded">{line}</span>;
+            } else if (line.trim() === '') {
+              content = <br />;
             } else {
-              if (line.trim() === '') content = <br />;
-              else content = <span className="block mb-1 text-slate-100">{line}</span>;
+              content = <span className="block mb-1 text-slate-100">{line}</span>;
             }
+          } else if (type === 'music_prompt' || type === 'analysis') {
+            if (line.match(/^\[(.*?)\]/)) {
+              content = <span className="block text-amber-400 font-mono text-sm mt-2 mb-1 bg-amber-400/10 p-2 rounded-md border border-amber-400/20" dir="ltr">{line}</span>;
+            } else if (line.trim() === '') {
+              content = <br />;
+            } else {
+              content = <span className="block mb-1 text-slate-100">{line}</span>;
+            }
+          } else {
+            if (line.trim() === '') content = <br />;
+            else content = <span className="block mb-1 text-slate-100">{line}</span>;
+          }
 
-            return (
-              <div
-                key={virtualRow.index}
-                data-index={virtualRow.index}
-                ref={rowVirtualizer.measureElement}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  transform: `translateY(${virtualRow.start}px)`,
-                }}
-              >
-                {content}
-              </div>
-            );
-          })}
-        </div>
+          return (
+            <div key={index}>
+              {content}
+            </div>
+          );
+        })}
       </div>
     );
   };
@@ -1296,7 +1325,7 @@ ${metaTags}
                 </div>
               ) : (
                 <div className="text-[1.3rem] md:text-[1.5rem] leading-[2.2] text-right font-arabic">
-                  <VirtualizedOutput text={outputResult} type={outputType} />
+                  <FormattedOutput text={outputResult} type={outputType} />
                 </div>
               )}
             </div>
