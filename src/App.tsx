@@ -44,6 +44,12 @@ const App = () => {
   const [customPronunciationRules, setCustomPronunciationRules] = useState('');
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
 
+  const [ttsPitch, setTtsPitch] = useState(1);
+  const [ttsRate, setTtsRate] = useState(0.85);
+
+  const [savedDrafts, setSavedDrafts] = useState<{id: string, text: string, date: string}[]>([]);
+  const [savedRules, setSavedRules] = useState<{id: string, rule: string, date: string}[]>([]);
+
   useEffect(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (SpeechRecognition) {
@@ -83,6 +89,14 @@ const App = () => {
     }
   };
 
+  useEffect(() => {
+    const drafts = localStorage.getItem('rika_saved_drafts');
+    if (drafts) setSavedDrafts(JSON.parse(drafts));
+    
+    const rules = localStorage.getItem('rika_saved_rules');
+    if (rules) setSavedRules(JSON.parse(rules));
+  }, []);
+
   const speakText = (textToSpeak: string) => {
     if (!window.speechSynthesis) {
       setError("متصفحك لا يدعم خاصية النطق الصوتي.");
@@ -101,7 +115,8 @@ const App = () => {
       utterance.voice = arabicVoice;
     }
 
-    utterance.rate = 0.85; 
+    utterance.rate = ttsRate; 
+    utterance.pitch = ttsPitch;
     
     window.speechSynthesis.speak(utterance);
   };
@@ -116,7 +131,7 @@ const App = () => {
     }
   };
 
-  const callAI = async (promptText: string, systemInstruction: string, useSearch = false, expectJson = false, audioData?: { data: string, mimeType: string }) => {
+  const callAI = async (promptText: string, systemInstruction: string, useSearch = false, expectJson = false, audioData?: { data: string, mimeType: string }, useThinking = false) => {
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     let retries = 0;
     const maxRetries = 5;
@@ -124,6 +139,10 @@ const App = () => {
     const config: any = {
       systemInstruction: systemInstruction,
     };
+
+    if (useThinking) {
+      config.thinkingConfig = { thinkingLevel: 'HIGH' };
+    }
 
     if (useSearch) {
       config.tools = [{ googleSearch: {} }];
@@ -143,7 +162,7 @@ const App = () => {
     while (retries < maxRetries) {
       try {
         const response = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
+          model: useThinking ? "gemini-3.1-pro-preview" : "gemini-3-flash-preview",
           contents: contents,
           config: config
         });
@@ -212,7 +231,7 @@ ${metaTags}
     أخرج النص فقط بدون أي تعليقات خارجية أو مقدمات.`;
 
     try {
-      const result = await callAI(`قم بترتيب وتأليف الأغنية باحترافية بناءً على: "${inputText}"`, sysPrompt);
+      const result = await callAI(`قم بترتيب وتأليف الأغنية باحترافية بناءً على: "${inputText}"`, sysPrompt, false, false, undefined, true);
       setOutputResult(result);
     } catch (err: any) {
       setError(err.message);
@@ -308,17 +327,29 @@ ${metaTags}
     المستخدم سيعطيك كلمة.
     مهمتك: أعطني كل احتمالات التشكيل (الحركات) المختلفة لهذه الكلمة.
     **ركز أولاً وبشكل أساسي على معانيها ونطقها في العامية المصرية أو الدارجة**، ثم اذكر معانيها ونطقها في الفصحى إذا كان لها استخدام مختلف.
-    أخرج النتيجة بصيغة JSON فقط مصفوفة كالتالي:
-    [
-      {"word": "الكلمة_بالتشكيل", "meaning": "معنى هذا التشكيل (مصري أو فصحى) ومتى يستخدم باختصار"}
-    ]`;
+    قم بتجميع التشكيلات المتشابهة أو التي تعود لنفس الجذر/المعنى الأساسي معاً، وأعطِ نسبة ثقة (Confidence Score) لكل تشكيل.
+    أخرج النتيجة بصيغة JSON فقط كالتالي:
+    {
+      "groups": [
+        {
+          "baseMeaning": "المعنى الأساسي أو الجذر",
+          "variations": [
+            {
+              "word": "الكلمة_بالتشكيل",
+              "meaning": "معنى هذا التشكيل ومتى يستخدم باختصار",
+              "confidence": 95
+            }
+          ]
+        }
+      ]
+    }`;
 
     try {
-      const result = await callAI(`هات كل احتمالات التشكيل للكلمة دي: "${searchWord}"`, sysPrompt, false, true);
+      const result = await callAI(`هات كل احتمالات التشكيل للكلمة دي: "${searchWord}"`, sysPrompt, false, true, undefined, true);
       const parsedData = JSON.parse(result);
-      setWordSuggestions(parsedData);
+      setWordSuggestions(parsedData.groups || []);
     } catch (err: any) {
-      setWordSuggestions([{ word: "خطأ", meaning: "حدث خطأ أثناء جلب التشكيلات، حاول مجدداً." }]);
+      setWordSuggestions([{ baseMeaning: "خطأ", variations: [{ word: "خطأ", meaning: "حدث خطأ أثناء جلب التشكيلات، حاول مجدداً.", confidence: 0 }] }]);
     } finally {
       setIsSearchingWord(false);
     }
@@ -335,7 +366,7 @@ ${metaTags}
     ["كلمة1", "كلمة2", "كلمة3"]`;
 
     try {
-      const result = await callAI(`هات كلمات على نفس قافية ووزن: "${rhymeSearchWord}"`, sysPrompt, false, true);
+      const result = await callAI(`هات كلمات على نفس قافية ووزن: "${rhymeSearchWord}"`, sysPrompt, false, true, undefined, true);
       const parsedData = JSON.parse(result);
       setRhymeResults(parsedData);
     } catch (err: any) {
@@ -355,7 +386,7 @@ ${metaTags}
     أخرج الشطر الجديد فقط بدون أي إضافات.`;
 
     try {
-      const result = await callAI(`استبدل هذا الشطر بقافية ووزن مختلفين: "${lineToReplace}"`, sysPrompt);
+      const result = await callAI(`استبدل هذا الشطر بقافية ووزن مختلفين: "${lineToReplace}"`, sysPrompt, false, false, undefined, true);
       setReplacementLine(result);
     } catch (err: any) {
       setReplacementLine("خطأ في استبدال الشطر");
@@ -385,7 +416,7 @@ ${metaTags}
     أخرج النتيجة كبرومبت جاهز للنسخ واللصق في Suno/Udio. أضف شرحاً بسيطاً بالعربية لما يفعله هذا البرومبت.`;
 
     try {
-      const result = await callAI(`اكتب برومبت موسيقي احترافي لـ Suno بناءً على: "${inputText}" ونوع "${genre}"`, sysPrompt);
+      const result = await callAI(`اكتب برومبت موسيقي احترافي لـ Suno بناءً على: "${inputText}" ونوع "${genre}"`, sysPrompt, false, false, undefined, true);
       setOutputResult(result);
     } catch (err: any) {
       setError(err.message);
@@ -482,6 +513,34 @@ ${metaTags}
   const loadInput = () => {
     const saved = localStorage.getItem('rika_saved_input');
     if (saved) setInputText(saved);
+  };
+
+  const handleSaveDraft = () => {
+    if (!inputText.trim()) return;
+    const newDraft = { id: Date.now().toString(), text: inputText, date: new Date().toLocaleDateString('ar-EG') };
+    const updatedDrafts = [newDraft, ...savedDrafts];
+    setSavedDrafts(updatedDrafts);
+    localStorage.setItem('rika_saved_drafts', JSON.stringify(updatedDrafts));
+  };
+
+  const handleDeleteDraft = (id: string) => {
+    const updatedDrafts = savedDrafts.filter(d => d.id !== id);
+    setSavedDrafts(updatedDrafts);
+    localStorage.setItem('rika_saved_drafts', JSON.stringify(updatedDrafts));
+  };
+
+  const handleSaveRule = () => {
+    if (!customPronunciationRules.trim()) return;
+    const newRule = { id: Date.now().toString(), rule: customPronunciationRules, date: new Date().toLocaleDateString('ar-EG') };
+    const updatedRules = [newRule, ...savedRules];
+    setSavedRules(updatedRules);
+    localStorage.setItem('rika_saved_rules', JSON.stringify(updatedRules));
+  };
+
+  const handleDeleteRule = (id: string) => {
+    const updatedRules = savedRules.filter(r => r.id !== id);
+    setSavedRules(updatedRules);
+    localStorage.setItem('rika_saved_rules', JSON.stringify(updatedRules));
   };
 
   const downloadOutput = () => {
@@ -687,20 +746,42 @@ ${metaTags}
           </div>
           
           {wordSuggestions && Array.isArray(wordSuggestions) && (
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 animate-in fade-in slide-in-from-top-2">
-              {wordSuggestions.map((item: any, index: number) => (
-                <div key={index} className="flex justify-between items-center p-3 bg-[#09090b] rounded-xl border border-slate-800 hover:border-indigo-500/50 transition-colors">
-                  <div>
-                    <span className="text-xl font-bold text-indigo-400 font-arabic">{highlightDiacritics(item.word)}</span>
-                    <p className="text-xs text-slate-400 mt-1">{item.meaning}</p>
+            <div className="mt-4 space-y-4 animate-in fade-in slide-in-from-top-2">
+              {wordSuggestions.map((group: any, groupIndex: number) => (
+                <div key={groupIndex} className="bg-[#09090b] rounded-xl border border-slate-800 p-4">
+                  <h3 className="text-sm font-bold text-slate-400 mb-3 border-b border-slate-800 pb-2">
+                    {group.baseMeaning}
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {group.variations?.map((item: any, idx: number) => (
+                      <div key={idx} className="flex flex-col p-3 bg-[#121217] rounded-xl border border-slate-700 hover:border-indigo-500/50 transition-colors relative overflow-hidden">
+                        <div className="flex justify-between items-start mb-2">
+                          <div>
+                            <span className="text-xl font-bold text-indigo-400 font-arabic">{highlightDiacritics(item.word)}</span>
+                            <p className="text-xs text-slate-400 mt-1">{item.meaning}</p>
+                          </div>
+                          <button 
+                            onClick={() => speakText(item.word)} 
+                            className="p-2 bg-indigo-900/30 text-indigo-300 rounded-lg hover:bg-indigo-600 hover:text-white transition-colors flex-shrink-0"
+                            title="استمع للنطق"
+                          >
+                            <Volume2 size={18} />
+                          </button>
+                        </div>
+                        {item.confidence !== undefined && (
+                          <div className="mt-2 flex items-center gap-2">
+                            <div className="flex-1 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                              <div 
+                                className={`h-full rounded-full ${item.confidence > 80 ? 'bg-emerald-500' : item.confidence > 50 ? 'bg-amber-500' : 'bg-red-500'}`} 
+                                style={{ width: `${item.confidence}%` }}
+                              />
+                            </div>
+                            <span className="text-[10px] font-bold text-slate-500">{item.confidence}% ثقة</span>
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                  <button 
-                    onClick={() => speakText(item.word)} 
-                    className="p-2.5 bg-indigo-900/30 text-indigo-300 rounded-xl hover:bg-indigo-600 hover:text-white transition-colors flex-shrink-0"
-                    title="استمع للنطق"
-                  >
-                    <Volume2 size={20} />
-                  </button>
                 </div>
               ))}
             </div>
@@ -839,10 +920,7 @@ ${metaTags}
                النص الأساسي (تحدث أو اكتب):
             </label>
             <div className="flex gap-2">
-              <button onClick={loadInput} className="text-slate-600 hover:text-indigo-400 transition-colors p-1" title="استرجاع المحفوظ">
-                <FolderOpen size={18} />
-              </button>
-              <button onClick={saveInput} className="text-slate-600 hover:text-emerald-400 transition-colors p-1" title="حفظ النص">
+              <button onClick={handleSaveDraft} className="text-slate-600 hover:text-emerald-400 transition-colors p-1" title="حفظ كمسودة">
                 <Save size={18} />
               </button>
               <button onClick={() => setInputText('')} className="text-slate-600 hover:text-red-400 transition-colors p-1" title="مسح">
@@ -887,19 +965,91 @@ ${metaTags}
             </button>
             
             {showAdvancedSettings && (
-              <div className="mt-3 p-4 bg-[#09090b] border border-slate-700 rounded-xl animate-in fade-in slide-in-from-top-2">
-                <label className="block text-xs font-bold text-slate-500 mb-2">
-                  قواعد نطق مخصصة (مثال: انطق القاف كهمزة دائماً، لا تنطق حرف الثاء بل تاء...):
-                </label>
-                <textarea
-                  value={customPronunciationRules}
-                  onChange={(e) => setCustomPronunciationRules(e.target.value)}
-                  placeholder="اكتب قواعدك المخصصة هنا..."
-                  className="w-full h-20 bg-[#121217] border border-slate-800 rounded-lg p-3 text-sm text-slate-300 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 resize-none font-arabic"
-                />
+              <div className="mt-3 p-4 bg-[#09090b] border border-slate-700 rounded-xl animate-in fade-in slide-in-from-top-2 space-y-4">
+                
+                {/* TTS Controls */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pb-4 border-b border-slate-800">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-2 flex justify-between">
+                      <span>سرعة النطق (Tempo):</span>
+                      <span className="text-indigo-400">{ttsRate}x</span>
+                    </label>
+                    <input 
+                      type="range" min="0.5" max="2" step="0.05" 
+                      value={ttsRate} onChange={(e) => setTtsRate(parseFloat(e.target.value))}
+                      className="w-full accent-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-2 flex justify-between">
+                      <span>حدة الصوت (Pitch):</span>
+                      <span className="text-indigo-400">{ttsPitch}</span>
+                    </label>
+                    <input 
+                      type="range" min="0.5" max="2" step="0.1" 
+                      value={ttsPitch} onChange={(e) => setTtsPitch(parseFloat(e.target.value))}
+                      className="w-full accent-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Custom Rules */}
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="block text-xs font-bold text-slate-500">
+                      قواعد نطق مخصصة (مثال: انطق القاف كهمزة دائماً):
+                    </label>
+                    <button onClick={handleSaveRule} className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1">
+                      <Save size={14} /> حفظ القاعدة
+                    </button>
+                  </div>
+                  <textarea
+                    value={customPronunciationRules}
+                    onChange={(e) => setCustomPronunciationRules(e.target.value)}
+                    placeholder="اكتب قواعدك المخصصة هنا..."
+                    className="w-full h-20 bg-[#121217] border border-slate-800 rounded-lg p-3 text-sm text-slate-300 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 resize-none font-arabic"
+                  />
+                  {savedRules.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {savedRules.map(rule => (
+                        <div key={rule.id} className="flex items-center gap-1 bg-slate-800/50 border border-slate-700 rounded-lg px-2 py-1">
+                          <button onClick={() => setCustomPronunciationRules(rule.rule)} className="text-xs text-slate-300 hover:text-white truncate max-w-[150px]">
+                            {rule.rule}
+                          </button>
+                          <button onClick={() => handleDeleteRule(rule.id)} className="text-red-400 hover:text-red-300 p-0.5">
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
+
+          {/* Saved Drafts Section */}
+          {savedDrafts.length > 0 && (
+            <div className="mt-4 p-4 bg-[#09090b] border border-slate-800 rounded-xl">
+              <h3 className="text-sm font-bold text-slate-400 mb-3 flex items-center gap-2">
+                <FolderOpen size={16} /> المسودات المحفوظة
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                {savedDrafts.map(draft => (
+                  <div key={draft.id} className="bg-[#121217] border border-slate-700 rounded-lg p-3 flex flex-col justify-between group hover:border-indigo-500/50 transition-colors">
+                    <p className="text-sm text-slate-300 line-clamp-2 mb-2 font-arabic">{draft.text}</p>
+                    <div className="flex justify-between items-center mt-2 pt-2 border-t border-slate-800">
+                      <span className="text-[10px] text-slate-500">{draft.date}</span>
+                      <div className="flex gap-2">
+                        <button onClick={() => setInputText(draft.text)} className="text-indigo-400 hover:text-indigo-300 text-xs font-bold">استرجاع</button>
+                        <button onClick={() => handleDeleteDraft(draft.id)} className="text-red-400 hover:text-red-300 text-xs font-bold">حذف</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Action Buttons Grid */}
           <div className="grid grid-cols-1 md:grid-cols-5 gap-3 mt-4">
